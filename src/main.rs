@@ -1,23 +1,23 @@
 use clap::{Arg, Command, ValueHint, builder::ArgAction, builder::ValueParser, builder::RangedU64ValueParser};
-use core::panic;
 use std::path::PathBuf;
-use std::fs::{self, DirEntry};
 use std::collections::HashSet;
+use walkdir::{DirEntry, IntoIter, WalkDir};
 
 #[derive(Debug)]
 struct Args {
     paths: Vec<PathBuf>,
     _output_file: Option<PathBuf>,
     _output_format: String,
-    _include_hidden: bool,
-    _max_depth: u32,
+    include_hidden: bool,
+    follow_links: bool,
+    max_depth: Option<usize>,
 }
 
 fn main() {
     let args: Args = get_args();
-    println!("{:?}", args);
+    // println!("{:?}", args);
     //verification?
-    let files: HashSet<PathBuf> = get_all_files(&args.paths);
+    let files: HashSet<PathBuf> = get_all_files(&args);
     println!("{:?}", files);
 }
 
@@ -66,12 +66,18 @@ fn get_args() -> Args {
                 .action(ArgAction::SetTrue)
         )
         .arg(
+            Arg::new("FOLLOW_LINKS")
+                .help("TODO")
+                .short('l')
+                .long("follow")
+                .action(ArgAction::SetTrue)
+        )
+        .arg(
             Arg::new("MAX_DEPTH")
                 .help("TODO")
                 .short('d')
                 .long("depth")
-                .default_value("0")
-                .value_parser(RangedU64ValueParser::<u32>::new())
+                .value_parser(RangedU64ValueParser::<usize>::new())
         )
         .get_matches();
 
@@ -80,35 +86,54 @@ fn get_args() -> Args {
         paths.push(path.clone());
     }
 
-    // matches.get_one::<PathBuf>("PATH").cloned().unwrap()
     return Args {
-        paths: paths,
+        paths,
         _output_file: matches.get_one::<PathBuf>("OUTPUT_FILE").cloned(),
         _output_format: matches.get_one::<String>("OUTPUT_FORMAT").cloned().unwrap(),
-        _include_hidden: matches.get_flag("INCLUDE_HIDDEN"),
-        _max_depth: matches.get_one::<u32>("MAX_DEPTH").copied().unwrap(),
+        include_hidden: matches.get_flag("INCLUDE_HIDDEN"),
+        follow_links: matches.get_flag("FOLLOW_LINKS"),
+        max_depth: matches.get_one::<usize>("MAX_DEPTH").copied(),
     };
 }
 
-fn get_all_files(paths: &Vec<PathBuf>) -> HashSet<PathBuf> {
+fn get_all_files(args: &Args) -> HashSet<PathBuf> {
     let mut files: HashSet<PathBuf> = HashSet::new();
-    for path in paths {
-        let mut abs_path: PathBuf = path.canonicalize().unwrap();
-        while abs_path.is_symlink() {
-            abs_path = fs::read_link(abs_path).unwrap();
+
+    let mut insert_file = |file: Result<DirEntry, walkdir::Error>| {
+        // Chaining this is kinda messy, but ignores any errors
+        if let Ok(file_entry) = file {
+            if file_entry.path().is_file() {
+                if let Ok(abs_path) = file_entry.path().canonicalize() {
+                    files.insert(abs_path);
+                }
+            }
         }
-        if abs_path.is_file() {
-            println!("Is file: {:?}", abs_path);
-            files.insert(abs_path.to_owned());
-        } else if abs_path.is_dir() {
-            println!("Is dir: {:?}", abs_path);
-            let contents = fs::read_dir(abs_path).unwrap().map(|entry| {
-                return entry.unwrap().path();
-            }).collect::<Vec<PathBuf>>();
-            println!("{:?}", contents);
-            files.extend(get_all_files(&contents));
+    };
+
+    for path in &args.paths {
+        let mut dir_walker: WalkDir = WalkDir::new(path).follow_links(args.follow_links);
+        if let Some(depth) = args.max_depth {
+            dir_walker = dir_walker.max_depth(depth);
+        }
+        
+        let walker: IntoIter = dir_walker.into_iter();
+        if !args.include_hidden {
+            for file in walker.filter_entry(|entry|
+                (
+                    !entry.file_name()
+                        .to_str()
+                        .map(|s| s.starts_with("."))
+                        .unwrap_or(false)
+                ) || (
+                    entry.depth() == 0
+                )
+            ) {
+                insert_file(file);
+            }
         } else {
-            println!("Doesn't exist: {:?}", abs_path);
+            for file in walker {
+                insert_file(file);
+            }
         }
     }
     return files;
