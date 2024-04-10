@@ -1,23 +1,24 @@
 use clap::{Arg, Command, ValueHint, builder::ArgAction, builder::ValueParser, builder::RangedU64ValueParser};
-
+use core::panic;
 use std::path::PathBuf;
-
+use std::fs::{self, DirEntry};
 use std::collections::HashSet;
 
 #[derive(Debug)]
 struct Args {
     paths: Vec<PathBuf>,
-    output_file: Option<PathBuf>,
-    output_format: String,
-    include_hidden: bool,
-    max_depth: u32,
+    _output_file: Option<PathBuf>,
+    _output_format: String,
+    _include_hidden: bool,
+    _max_depth: u32,
 }
 
 fn main() {
     let args: Args = get_args();
     println!("{:?}", args);
     //verification?
-    let files: HashSet<PathBuf> = get_all_files(args);
+    let files: HashSet<PathBuf> = get_all_files(&args.paths);
+    println!("{:?}", files);
 }
 
 fn get_args() -> Args {
@@ -82,28 +83,33 @@ fn get_args() -> Args {
     // matches.get_one::<PathBuf>("PATH").cloned().unwrap()
     return Args {
         paths: paths,
-        output_file: matches.get_one::<PathBuf>("OUTPUT_FILE").cloned(),
-        output_format: matches.get_one::<String>("OUTPUT_FORMAT").cloned().unwrap(),
-        include_hidden: matches.get_flag("INCLUDE_HIDDEN"),
-        max_depth: matches.get_one::<u32>("MAX_DEPTH").copied().unwrap(),
+        _output_file: matches.get_one::<PathBuf>("OUTPUT_FILE").cloned(),
+        _output_format: matches.get_one::<String>("OUTPUT_FORMAT").cloned().unwrap(),
+        _include_hidden: matches.get_flag("INCLUDE_HIDDEN"),
+        _max_depth: matches.get_one::<u32>("MAX_DEPTH").copied().unwrap(),
     };
 }
 
-fn get_all_files(args: Args) -> HashSet<PathBuf> {
-    let files: HashSet<PathBuf> = HashSet::new();
-    for path in args.paths {
-        if path.is_file() {
-            println!("Is file: {:?}", path);
-        } else if path.is_dir() {
-            println!("Is dir: {:?}", path);
+fn get_all_files(paths: &Vec<PathBuf>) -> HashSet<PathBuf> {
+    let mut files: HashSet<PathBuf> = HashSet::new();
+    for path in paths {
+        let mut abs_path: PathBuf = path.canonicalize().unwrap();
+        while abs_path.is_symlink() {
+            abs_path = fs::read_link(abs_path).unwrap();
+        }
+        if abs_path.is_file() {
+            println!("Is file: {:?}", abs_path);
+            files.insert(abs_path.to_owned());
+        } else if abs_path.is_dir() {
+            println!("Is dir: {:?}", abs_path);
+            let contents = fs::read_dir(abs_path).unwrap().map(|entry| {
+                return entry.unwrap().path();
+            }).collect::<Vec<PathBuf>>();
+            println!("{:?}", contents);
+            files.extend(get_all_files(&contents));
         } else {
-            println!("Is none: {:?}", path);
+            println!("Doesn't exist: {:?}", abs_path);
         }
     }
     return files;
 }
-
-// Input handling
-// Input verification & interpretation
-// Input execution
-// Output
