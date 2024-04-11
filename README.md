@@ -1,0 +1,2 @@
+# Todo
+I haven't fully decided on a name for this project yet but one option is 'todo'. This is a command line utility written in Rust (largely as a learning experience) which searches all input files and directories for strings or regexes and then outputting them in a customisable diff-like format. One of the primary uses of this program is intended to find all TODO or FIXME comments in a project and produce a checklist with the location and context for each.
