@@ -1,3 +1,5 @@
+#![allow(clippy::needless_return)]
+
 use clap::{builder::{ArgAction, RangedU64ValueParser, ValueParser}, Arg, Command, ValueHint};
 use fancy_regex::{Match, Regex};
 use std::{fs, path::PathBuf};
@@ -37,79 +39,47 @@ fn main() {
     let files: HashSet<PathBuf> = get_all_files(&args);
     println!("{:?}", files);
 
-    println!("{:?}", find_pattern_in_files(&files, &args.patterns));
+    let all_found_patterns: Vec<FileFoundPatterns> = 
+        find_pattern_in_files(&files, &args.patterns);
+    println!("{:?}", all_found_patterns);
 }
 
 fn get_args() -> Args {
-    let matches = Command::new("todo")
-        .author("Inferno214221")
-        .version("0.1.0")
+    let matches = Command::new("todo").author("Inferno214221").version("0.1.0")
         .about("A CLI program to find all instances of TODO notes within a file or directory")
         .disable_version_flag(true)
         .arg(
-            Arg::new("PATH")
-                .help("TODO")
-                .action(ArgAction::Append)
-                .required(true)
-                .value_parser(ValueParser::path_buf())
-                .value_hint(ValueHint::AnyPath)
+            Arg::new("PATH").help("TODO").action(ArgAction::Append).required(true)
+                .value_parser(ValueParser::path_buf()).value_hint(ValueHint::AnyPath)
         )
         .arg(
-            Arg::new("STRING")
-                .help("TODO")
-                .short('s')
-                .long("string")
-                .action(ArgAction::Append)
+            Arg::new("STRING").help("TODO").short('s').long("string").action(ArgAction::Append)
         )
         .arg(
-            Arg::new("REGEX")
-                .help("TODO")
-                .short('r')
-                .long("regex")
-                .action(ArgAction::Append)
+            Arg::new("REGEX").help("TODO").short('r').long("regex").action(ArgAction::Append)
         )
         .arg(
-            Arg::new("OUTPUT_FILE")
-                .help("TODO")
-                .short('o')
-                .long("output")
-                .value_parser(ValueParser::path_buf())
-                .value_hint(ValueHint::FilePath)
+            Arg::new("OUTPUT_FILE").help("TODO").short('o').long("output")
+                .value_parser(ValueParser::path_buf()).value_hint(ValueHint::FilePath)
         )
         .arg(
-            Arg::new("OUTPUT_FORMAT")
-                .help("TODO")
-                .short('f')
-                .long("format")
-                .default_value("TODO")
+            Arg::new("OUTPUT_FORMAT").help("TODO").short('f').long("format").default_value("TODO")
                 .value_parser(ValueParser::string())
         )
         .arg(
-            Arg::new("INCLUDE_HIDDEN")
-                .help("Include hidden files")
-                .short('a')
-                .long("hidden")
+            Arg::new("INCLUDE_HIDDEN").help("Include hidden files").short('a').long("hidden")
                 .action(ArgAction::SetTrue)
         )
         .arg(
-            Arg::new("FOLLOW_LINKS")
-                .help("Follow symbolic links")
-                .short('l')
-                .long("follow")
+            Arg::new("FOLLOW_LINKS").help("Follow symbolic links").short('l').long("follow")
                 .action(ArgAction::SetTrue)
         )
         .arg(
-            Arg::new("MAX_DEPTH")
-                .help("Limit the depth of subdirectories included")
-                .short('d')
-                .long("depth")
-                .value_parser(RangedU64ValueParser::<usize>::new())
+            Arg::new("MAX_DEPTH").help("Limit the depth of subdirectories included").short('d')
+                .long("depth").value_parser(RangedU64ValueParser::<usize>::new())
         )
         .arg(
-            Arg::new("VERSION")
-                .help("Print version")
-                .short('v')
-                .long("version")
+            Arg::new("VERSION").help("Print version").short('v').long("version")
                 .action(ArgAction::Version)
         )
         .get_matches();
@@ -117,7 +87,7 @@ fn get_args() -> Args {
     let mut patterns: Vec<Regex> = Vec::new();
 
     if let Some(values) = matches.get_many::<String>("STRING") {
-        patterns.append(&mut values.cloned().filter_map(|value| {
+        patterns.append(&mut values.cloned().filter_map(|value: String| {
             let escaped_value: &str = &fancy_regex::escape(&value);
             return Regex::new(escaped_value).ok();
         }).collect::<Vec<Regex>>());
@@ -125,7 +95,7 @@ fn get_args() -> Args {
     }
 
     if let Some(values) = matches.get_many::<String>("REGEX") {
-        patterns.append(&mut values.cloned().filter_map(|value| {
+        patterns.append(&mut values.cloned().filter_map(|value: String| {
             return Regex::new(&value).ok();
         }).collect::<Vec<Regex>>());
     }
@@ -165,11 +135,11 @@ fn get_all_files(args: &Args) -> HashSet<PathBuf> {
         
         let walker: IntoIter = dir_walker.into_iter();
         if !args.include_hidden {
-            for file in walker.filter_entry(|entry|
+            for file in walker.filter_entry(|entry: &DirEntry|
                 (
                     !entry.file_name()
                         .to_str()
-                        .map(|s| s.starts_with("."))
+                        .map(|s: &str| s.starts_with('.'))
                         .unwrap_or(false)
                 ) || (
                     entry.depth() == 0
@@ -187,20 +157,20 @@ fn get_all_files(args: &Args) -> HashSet<PathBuf> {
 }
 
 fn find_pattern_in_files<'a>(files: &'a HashSet<PathBuf>, patterns: &'a Vec<Regex>) -> Vec<FileFoundPatterns<'a>> {
-    return files.into_iter().filter_map(|file| {
+    return files.iter().filter_map(|file: &PathBuf| {
         if let Ok(contents) = fs::read_to_string(file) {
             let mut found_patterns: Vec<FoundPattern> = Vec::new();
             for pattern in patterns {
-                let matches: Vec<Match> = find_all_matches(&pattern, &contents);
-                found_patterns.append(&mut matches.into_iter().map(|found| FoundPattern {
-                    pattern: &pattern,
+                let matches: Vec<Match> = find_all_matches(pattern, &contents);
+                found_patterns.append(&mut matches.into_iter().map(|found: Match| FoundPattern {
+                    pattern,
                     start: found.start(),
                     end: found.end(),
                     // matched: found.as_str().to_owned()
                 }).collect::<Vec<FoundPattern>>());
             }
             return Some(FileFoundPatterns {
-                file: &file,
+                file,
                 found_patterns,
             });
         } //TODO: use match and throw an error on read fail
