@@ -7,5 +7,7 @@ edition = "2021"
 
 [dependencies]
 clap = "4.5.4"
+colored = "2.1.0"
 fancy-regex = "0.13.0"
+unescape = "0.1.0"
 walkdir = "2.5.0"
