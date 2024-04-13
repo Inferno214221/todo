@@ -16,7 +16,7 @@ struct Args {
     patterns: Vec<Regex>,
     output_file: Option<PathBuf>,
     output_format: String,
-    _context: u32,
+    context: usize,
     include_hidden: bool,
     follow_links: bool,
     max_depth: Option<usize>,
@@ -95,7 +95,7 @@ fn get_args() -> Args {
         .arg(
             Arg::new("OUTPUT_FORMAT").help("TODO").short('f').long("output-format")
                 .default_value(
-                    "%bold%%file_path%\n\
+                    "%bold%%file%\n\
                     %clear%%blue%@@ %x%,%y% @@\n\
                     %white%%context_before%\n\
                     %green%%before%%bold%%match%%clear%%after%\n\
@@ -104,7 +104,7 @@ fn get_args() -> Args {
         )
         .arg(
             Arg::new("CONTEXT").help("TODO").short('c').long("context-lines").default_value("3")
-                .value_parser(RangedU64ValueParser::<u32>::new())
+                .value_parser(RangedU64ValueParser::<usize>::new())
         )
         .get_matches();
 
@@ -137,8 +137,8 @@ fn get_args() -> Args {
         output_format: unescape(
             &matches.get_one::<String>("OUTPUT_FORMAT").cloned()
                 .expect("OUTPUT_FORMAT has a default value")
-        ).expect("unescape shouldn't error"),
-        _context: matches.get_one::<u32>("CONTEXT").copied()
+        ).expect("unescape shouldn't error"), //TODO: can't input "\\"
+        context: matches.get_one::<usize>("CONTEXT").copied()
             .expect("CONTEXT has a default value"),
         include_hidden: matches.get_flag("INCLUDE_HIDDEN"),
         follow_links: matches.get_flag("FOLLOW_LINKS"),
@@ -229,67 +229,104 @@ fn find_all_matches<'b>(pattern: &Regex, search: &'b str) -> Vec<Match<'b>> {
 fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args) {
     let escaped_regex: Regex = Regex::new(r"%(\w+)%").unwrap();
     let mut output_lines: Vec<ColoredString> = Vec::new();
-    let mut current_color: Color = Color::White;//
-    let mut current_styles: Styles = Styles::Clear;
 
-    let apply_styles = |string: &str, styles: Styles, color: Color| {
-        match styles {
-            Styles::Clear => string.clear(),
-            Styles::Bold => string.bold(),
-            Styles::Italic => string.italic(),
-            Styles::Underline => string.underline(),
-            _ => ColoredString::from(string),
-        }.color(color)
-    };
+    for found_pattern in &file_found_patterns.found_patterns {
+        let newlines: Vec<usize> = file_found_patterns.contents.match_indices('\n')
+            .map(|index| index.0).collect::<Vec<usize>>();
+        let mut closest_start: usize = 0;
+        while newlines[closest_start] < found_pattern.start {
+            closest_start += 1;
+        }
+        closest_start -= 1;
+        let mut closest_end: usize = closest_start;
+        while newlines[closest_end] < found_pattern.end {
+            closest_end += 1;
+        }
 
-    let mut location: usize = 0;
-    while let Ok(Some(escaped)) = escaped_regex.find_from_pos(&args.output_format, location) {
-        // Resolve characters inbetween
-        output_lines.push(
-            apply_styles(
-                &args.output_format[location..escaped.start()],
-                current_styles,
-                current_color
-            )
-        );
-        // Resolve escaped
-        let escaped_string: &str = &escaped.as_str()[1..escaped.as_str().len() - 1];
-        if let Ok(color) = Color::from_str(escaped_string) {
-            current_color = color;
-        } else if let Some(styles) = match escaped_string {
-            "clear" => Some(Styles::Clear),
-            "bold" => Some(Styles::Bold),
-            "italic" => Some(Styles::Italic),
-            "underline" => Some(Styles::Underline),
-            _ => None,
-        } {
-            current_styles = styles;
-        } else {
+        let contents: &str = file_found_patterns.contents.as_str();
+        let context_before: &str = &contents
+            [match (closest_start as isize - args.context as isize) >= 0 {
+                true => newlines[closest_start - args.context] + 1,
+                false => 0
+            }..newlines[closest_start]];
+        let before: &str = &contents
+            [newlines[closest_start] + 1..found_pattern.start];
+        let matched: &str = &contents
+            [found_pattern.start..found_pattern.end];
+        let after: &str = &contents
+            [found_pattern.end..newlines[closest_end]];
+        let context_after: &str = &contents
+            [newlines[closest_end] + 1..match closest_start + args.context + 1 < newlines.len() {
+                true => newlines[closest_start + args.context + 1],
+                false => file_found_patterns.contents.as_str().len()
+            }];
+
+        //TODO: extract below this into a different function
+        let mut current_color: Color = Color::White;//
+        let mut current_styles: Styles = Styles::Clear;
+
+        let apply_styles = |string: &str, styles: Styles, color: Color| {
+            match styles {
+                Styles::Clear => string.clear(),
+                Styles::Bold => string.bold(),
+                Styles::Italic => string.italic(),
+                Styles::Underline => string.underline(),
+                _ => ColoredString::from(string),
+            }.color(color)
+        };
+
+        let mut location: usize = 0;
+        while let Ok(Some(escaped)) = escaped_regex.find_from_pos(&args.output_format, location) {
+            // Resolve characters inbetween
             output_lines.push(
                 apply_styles(
-                    match escaped_string {
-                        "file_path" => file_found_patterns.file.to_str().unwrap(),
-                        "x" => escaped_string,
-                        "y" => escaped_string,
-                        "before" => escaped_string,
-                        "match" => escaped_string,
-                        "pattern" => escaped_string,
-                        "after" => escaped_string,
-                        "context_before" => escaped_string,
-                        "context_after" => escaped_string,
-                        _ => escaped_string,
-                    },
+                    &args.output_format[location..escaped.start()],
                     current_styles,
                     current_color
                 )
             );
+            // Resolve escaped
+            let escaped_string: &str = &escaped.as_str()[1..escaped.as_str().len() - 1];
+            if let Ok(color) = Color::from_str(escaped_string) {
+                current_color = color;
+            } else if let Some(styles) = match escaped_string {
+                "clear" => Some(Styles::Clear),
+                "bold" => Some(Styles::Bold),
+                "italic" => Some(Styles::Italic),
+                "underline" => Some(Styles::Underline),
+                _ => None,
+            } {
+                current_styles = styles;
+            } else {
+                output_lines.push(
+                    apply_styles(
+                        match escaped_string {
+                            "file" => file_found_patterns.file.to_str().unwrap(),
+                            "file_once" => escaped_string,
+                            "file_once_line" => escaped_string,
+                            "x" => escaped_string,
+                            "y" => escaped_string,
+                            "before" => before,
+                            "match" => matched,
+                            "pattern" => found_pattern.pattern.as_str(),
+                            "after" => after,
+                            "context_before" => context_before,
+                            "context_after" => context_after,
+                            _ => escaped_string,
+                        },
+                        current_styles,
+                        current_color
+                    )
+                );
+            }
+            location = escaped.end();
         }
-        location = escaped.end();
+        // Resolve characters after last match
+        output_lines.push(
+            args.output_format[location..].to_string().color(current_color)
+        );
+        //TODO: finish new function extraction
     }
-    // Resolve characters after last match
-    output_lines.push(
-        args.output_format[location..].to_string().color(current_color)
-    );
 
     // output_lines.push(ColoredString::from("\n"));
     for line in output_lines {
