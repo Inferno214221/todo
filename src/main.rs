@@ -4,7 +4,7 @@
 
 use clap::{builder::{ArgAction, RangedU64ValueParser, ValueParser}, Arg, Command, ValueHint};
 use fancy_regex::{Match, Regex};
-use std::{env, fs, path::{Path, PathBuf}, str::FromStr};
+use std::{env, ffi::OsString, fs, path::{Path, PathBuf}, str::FromStr};
 use std::collections::HashSet;
 use walkdir::{DirEntry, IntoIter, WalkDir};
 use colored::{Color, ColoredString, Colorize, Styles};
@@ -14,6 +14,8 @@ use unescape::unescape;
 //TODO: check all unwrap / expect usages
 //TODO: write own character escaper function
 //TODO: sort found paths consistently
+//TODO: support \r\n
+//TODO: use lines() rather than split('\n')?
 
 #[derive(Debug)]
 struct Args {
@@ -56,20 +58,18 @@ struct OutputValues<'a> {
 
 fn main() {
     let args: Args = get_args();
-    // println!("{:?}", args);
-
-    //TODO: verification?
 
     let files: HashSet<PathBuf> = get_all_files(&args);
-    // println!("{:?}", files);
 
     let all_found_patterns: Vec<FileFoundPatterns> = 
         find_pattern_in_files(&files, &args.patterns);
-    // println!("{:?}", all_found_patterns);
 
+    let mut output: Vec<ColoredString> = Vec::new();
     for file_found_patterns in all_found_patterns {
-        generate_output_for_file(&file_found_patterns, &args);
+        output.extend(generate_output_for_file(&file_found_patterns, &args));
     }
+
+    write_output(&output, &args);
 }
 
 fn get_args() -> Args {
@@ -85,7 +85,6 @@ fn get_args() -> Args {
                 .default_value(
                     env::current_dir().expect("Should be able to get the cwd").into_os_string()
                 ).value_parser(ValueParser::path_buf()).value_hint(ValueHint::AnyPath)
-                //TODO: can be invalid
         )
         .next_help_heading("File Selection")
         .arg(
@@ -131,9 +130,11 @@ fn get_args() -> Args {
         .get_matches();
 
     let mut patterns: Vec<Regex> = Vec::new();
+    
+    //TODO: validate path
 
     if let Some(values) = matches.get_many::<String>("STRING") {
-        patterns.append(&mut values.cloned().filter_map(|value: String| {
+        patterns.extend(values.cloned().filter_map(|value: String| {
             let escaped_value: &str = &fancy_regex::escape(&value);
             return Regex::new(escaped_value).ok();
         }).collect::<Vec<Regex>>());
@@ -141,21 +142,16 @@ fn get_args() -> Args {
     }
 
     if let Some(values) = matches.get_many::<String>("REGEX") {
-        patterns.append(&mut values.cloned().filter_map(|value: String| {
+        patterns.extend(values.cloned().filter_map(|value: String| {
             return Regex::new(&value).ok();
         }).collect::<Vec<Regex>>());
-    }
-
-    let mut output_file: Option<PathBuf> = matches.get_one::<PathBuf>("OUTPUT_FILE").cloned();
-    if let Some(e) = output_file {
-        output_file = e.canonicalize().ok();
     }
 
     return Args {
         paths: matches.get_many::<PathBuf>("PATH").expect("PATH is required").cloned()
             .collect::<Vec<PathBuf>>(),
         patterns,
-        output_file,
+        output_file: matches.get_one::<PathBuf>("OUTPUT_FILE").cloned(),
         output_format: unescape(
             &matches.get_one::<String>("OUTPUT_FORMAT").cloned()
                 .expect("OUTPUT_FORMAT has a default value")
@@ -220,7 +216,7 @@ fn find_pattern_in_files<'a>(
             let mut found_patterns: Vec<FoundPattern> = Vec::new();
             for pattern in patterns {
                 let matches: Vec<Match> = find_all_matches(pattern, &contents);
-                found_patterns.append(&mut matches.into_iter().map(|found: Match| FoundPattern {
+                found_patterns.extend(matches.into_iter().map(|found: Match| FoundPattern {
                     pattern,
                     start: found.start(),
                     end: found.end(),
@@ -248,7 +244,7 @@ fn find_all_matches<'a>(pattern: &Regex, search: &'a str) -> Vec<Match<'a>> {
     return matches;
 }
 
-fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args) {
+fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args) -> Vec<ColoredString> {
     let mut output_lines: Vec<ColoredString> = Vec::new();
     //TODO: can't handle matches on the first line kinda need to add 0 and the end to this array
     let mut is_first_pattern: bool = true;
@@ -333,7 +329,7 @@ fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args
 
         let y: String = (closest_start + 2).to_string();
 
-        output_lines.append(&mut resolve_output_values(
+        output_lines.extend(resolve_output_values(
             args,
             file_found_patterns.file,
             OutputValues {
@@ -351,9 +347,7 @@ fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args
         is_first_pattern = false;
     }
 
-    for line in output_lines {
-        print!("{}", line);
-    }
+    return output_lines;
 }
 
 fn apply_styles(string: &str, styles: Styles, color: Color) -> ColoredString {
@@ -372,6 +366,7 @@ fn resolve_output_values(
     output_values: OutputValues,
 ) -> Vec<ColoredString> {
     let escaped_regex: Regex = Regex::new(r"%(\w+)%").unwrap();
+    let empty_os: OsString = OsString::new();
     let mut output_lines: Vec<ColoredString> = Vec::new();
     let mut current_color: Color = Color::White;//
     let mut current_styles: Styles = Styles::Clear;
@@ -403,6 +398,7 @@ fn resolve_output_values(
                 apply_styles(
                     match escaped_string {
                         "file" => file.to_str().unwrap(),
+                        "file_ext" => file.extension().unwrap_or(&empty_os).to_str().unwrap(),
                         "file_once" => if output_values.is_first_pattern
                             {file.to_str().unwrap()} else {""},
                         "line_once" => if output_values.is_first_pattern {"\n"} else {""},
@@ -428,4 +424,22 @@ fn resolve_output_values(
         args.output_format[location..].to_owned().color(current_color)
     );
     return  output_lines;
+}
+
+fn write_output(lines: &Vec<ColoredString>, args: &Args) {
+    match &args.output_file {
+        Some(output_file) => {
+            let _ = fs::write(
+                output_file,
+                lines.iter().map(
+                    |colored: &ColoredString| colored.repeat(1) // to_string() includes color codes
+                ).collect::<Vec<String>>().join("")
+            );
+        },
+        None => {
+            for line in lines {
+                print!("{}", line);
+            }
+        },
+    }
 }
