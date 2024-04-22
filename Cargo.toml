@@ -9,5 +9,5 @@ edition = "2021"
 clap = { version = "4.5.4", features = ["string"] }
 colored = "2.1.0"
 fancy-regex = "0.13.0"
-unescape = "0.1.0"
+unescaper = "0.1.4"
 walkdir = "2.5.0"
