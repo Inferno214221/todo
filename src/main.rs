@@ -11,9 +11,8 @@ use colored::{Color, ColoredString, Colorize, Styles};
 
 // TODO: check all lifetime specifiers
 // TODO: check all unwrap / expect usages
-// TODO: sort found paths consistently
-// TODO: support \r\n
-// TODO: use lines() rather than split('\n')?
+// TODO: check that \r\n is supported
+// ? should I use lines() rather than split('\n')?
 // ? when should I use explicit typing?
 
 #[derive(Debug)]
@@ -21,7 +20,9 @@ struct Args {
     paths: Vec<PathBuf>,
     patterns: Vec<Regex>,
     output_file: Option<PathBuf>,
-    output_format: String,
+    // output_format: String,
+    file_output: String,
+    match_output: String,
     context: usize,
     include_hidden: bool,
     follow_links: bool,
@@ -49,7 +50,7 @@ struct OutputValues<'a> {
     matched: String,
     after: String,
     context_after: String,
-    is_first_pattern: bool,
+    // is_first_pattern: bool,
     pattern: &'a Regex,
     x: String,
     y: String,
@@ -116,31 +117,12 @@ fn get_args() -> Args {
                 .value_parser(ValueParser::path_buf()).value_hint(ValueHint::FilePath)
         )
         .arg(
-            Arg::new("OUTPUT_FORMAT").help("TODO").short('f').long("output-format")
-                .default_value(
-                    "%bold%%file_once%%line_once%\
-                    %clear%%blue%@@ %x%,%y% @@\n\
-                    %white%%context_before%\n\
-                    %green%%before%%bold%%match%%clear%%after%\n\
-                    %white%%context_after%\n"
-                ).value_parser(ValueParser::string())
-                    // Markdown Format
-                    // "# %file_once%%line_once%\n
-                    // ## %match%\n\n\
-                    // - [ ] \[Ln %y%, Col %x%]\n\
-                    // \`\`\`%file_ext%\n\
-                    // %context_before%\n\
-                    // \`\`\`\n\
-                    // \`%before%\`**%match%**\`%after%\`\n\
-                    // \`\`\`%file_ext%\n\
-                    // %context_after%\n\
-                    // \`\`\`\n"
-
-                    // Short Markdown List
-                    // "%line_once%## %file_once%%line_once%\n\
-                    // - [ ] %after% \\\\[Ln %y%, Col %x%]\n"
-
-                    // TODO: support different string definitions for file and match
+            Arg::new("FILE_OUTPUT").help("TODO").short('f').long("file-output")
+                .value_parser(ValueParser::string())
+        )
+        .arg(
+            Arg::new("MATCH_OUTPUT").help("TODO").short('m').long("match-output")
+                .value_parser(ValueParser::string())
         )
         .arg(
             Arg::new("CONTEXT").help("TODO").short('c').long("context-lines").default_value("3")
@@ -163,15 +145,37 @@ fn get_args() -> Args {
         }).collect::<Vec<Regex>>());
     }
 
+    let match_output_option: Option<&String> = matches.get_one::<String>("MATCH_OUTPUT");
+    let file_output_option: Option<&String> = matches.get_one::<String>("FILE_OUTPUT");
+
+    let match_output: String;
+    let file_output: String;
+    match match_output_option {
+        Some(value) => {
+            match_output = value.clone();
+            file_output = String::from("");
+        },
+        None => {
+            match_output = String::from(
+                "%blue%@@ %x%,%y% @@\n\
+                %white%%context_before%\n\
+                %green%%before%%bold%%match%%clear%%after%\n\
+                %white%%context_after%\n"
+            );
+            file_output = match file_output_option {
+                Some(value) => value.clone(),
+                None => String::from("%bold%%file%\n%clear%"),
+            };
+        },
+    };
+
     return Args {
         paths: matches.get_many::<PathBuf>("PATH").expect("PATH is required").cloned()
             .collect::<Vec<PathBuf>>(),
         patterns,
         output_file: matches.get_one::<PathBuf>("OUTPUT_FILE").cloned(),
-        output_format: unescape(
-            &matches.get_one::<String>("OUTPUT_FORMAT").cloned()
-                .expect("OUTPUT_FORMAT has a default value")
-        ),
+        file_output: unescape(&file_output),
+        match_output: unescape(&match_output),
         context: matches.get_one::<usize>("CONTEXT").copied()
             .expect("CONTEXT has a default value"),
         include_hidden: matches.get_flag("INCLUDE_HIDDEN"),
@@ -199,7 +203,7 @@ fn get_all_files(args: &Args) -> HashSet<PathBuf> {
             dir_walker = dir_walker.max_depth(depth);
         }
         
-        let walker: IntoIter = dir_walker.into_iter();
+        let walker: IntoIter = dir_walker.sort_by_file_name().into_iter();
         if !args.include_hidden {
             for file in walker.filter_entry(|entry: &DirEntry|
                 (
@@ -345,6 +349,8 @@ fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args
 
         let y: String = (closest_start + 2).to_string();
 
+        let once_output: String = args.file_output.clone() + &args.match_output;
+
         output_lines.extend(resolve_output_values(
             args,
             file_found_patterns.file,
@@ -354,11 +360,15 @@ fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args
                 matched,
                 after,
                 context_after,
-                is_first_pattern,
+                // is_first_pattern,
                 pattern: found_pattern.pattern,
                 x,
                 y,
             },
+            match is_first_pattern {
+                true => &once_output,
+                false => &args.match_output,
+            }
         ));
         is_first_pattern = false;
     }
@@ -370,8 +380,10 @@ fn resolve_output_values(
     args: &Args,
     file: &Path,
     output_values: OutputValues,
+    output_format: &str,
 ) -> Vec<String> {
-    let escaped_regex: Regex = Regex::new(r"%(\w+)%").unwrap();
+    let escaped_regex: Regex = Regex::new(r"%(\w+)%")
+        .expect("Regex is predefined and shouldn't differ between runs.");
     let empty_os: OsString = OsString::new();
     let mut output_lines: Vec<String> = Vec::new();
     let mut current_color: Color = Color::White;//
@@ -393,11 +405,11 @@ fn resolve_output_values(
     };
 
     let mut location: usize = 0;
-    while let Ok(Some(escaped)) = escaped_regex.find_from_pos(&args.output_format, location) {
+    while let Ok(Some(escaped)) = escaped_regex.find_from_pos(output_format, location) {
         // Resolve characters in between
         output_lines.push(
             apply_styles(
-                &args.output_format[location..escaped.start()],
+                &output_format[location..escaped.start()],
                 current_styles,
                 current_color
             )
@@ -420,9 +432,9 @@ fn resolve_output_values(
                     match escaped_string {
                         "file" => file.to_str().unwrap(),
                         "file_ext" => file.extension().unwrap_or(&empty_os).to_str().unwrap(),
-                        "file_once" => if output_values.is_first_pattern
-                            {file.to_str().unwrap()} else {""},
-                        "line_once" => if output_values.is_first_pattern {"\n"} else {""},
+                        // "file_once" => if output_values.is_first_pattern
+                        //     {file.to_str().unwrap()} else {""},
+                        // "line_once" => if output_values.is_first_pattern {"\n"} else {""},
                         "x" => output_values.x.as_str(),
                         "y" => output_values.y.as_str(),
                         "before" => output_values.before.as_str(),
@@ -442,7 +454,7 @@ fn resolve_output_values(
     }
     // Resolve characters after last match
     output_lines.push(
-        args.output_format[location..].to_owned()
+        output_format[location..].to_owned()
     );
     return output_lines;
 }
