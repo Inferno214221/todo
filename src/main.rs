@@ -20,7 +20,6 @@ struct Args {
     paths: Vec<PathBuf>,
     patterns: Vec<Regex>,
     output_file: Option<PathBuf>,
-    // output_format: String,
     file_output: String,
     match_output: String,
     context: usize,
@@ -50,7 +49,6 @@ struct OutputValues<'a> {
     matched: String,
     after: String,
     context_after: String,
-    // is_first_pattern: bool,
     pattern: &'a Regex,
     x: String,
     y: String,
@@ -153,7 +151,10 @@ fn get_args() -> Args {
     match match_output_option {
         Some(value) => {
             match_output = value.clone();
-            file_output = String::from("");
+            file_output = match file_output_option {
+                Some(value) => value.clone(),
+                None => String::from(""),
+            };
         },
         None => {
             match_output = String::from(
@@ -168,6 +169,14 @@ fn get_args() -> Args {
             };
         },
     };
+
+    // Markdown Format
+    // -f "# %file%\n\n"
+    // -m "## %match%\n\n\- [ ] \\[Ln %y%, Col %x%]\n\`\`\`%file_ext%\n%context_before%\n\`\`\`\n\`%before%%match%\`**%after%**\n\`\`\`%file_ext%\n%context_after%\n\`\`\`\n"
+
+    // Short Markdown List
+    // -f "# %file%\n\n"
+    // -m "\- [ ] %match%%after% \\[Ln %y%, Col %x%]\n"
 
     return Args {
         paths: matches.get_many::<PathBuf>("PATH").expect("PATH is required").cloned()
@@ -247,7 +256,7 @@ fn find_pattern_in_files<'a>(
                 contents,
                 found_patterns,
             });
-        } // TODO: use match and throw an error on read fail
+        } // ? use match and throw an error on read fail
         return None;
     }).collect::<Vec<FileFoundPatterns<'a>>>();
 }
@@ -263,7 +272,7 @@ fn find_all_matches<'a>(pattern: &Regex, search: &'a str) -> Vec<Match<'a>> {
 }
 
 fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args) -> Vec<String> {
-    let mut output_lines: Vec<String> = Vec::new();
+    let mut output: Vec<String> = Vec::new();
     // TODO: can't handle matches on the first line kinda need to add 0 and the end to this array
     let mut is_first_pattern: bool = true;
 
@@ -350,8 +359,7 @@ fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args
         let y: String = (closest_start + 2).to_string();
 
         let once_output: String = args.file_output.clone() + &args.match_output;
-
-        output_lines.extend(resolve_output_values(
+        output.extend(resolve_output_values(
             args,
             file_found_patterns.file,
             OutputValues {
@@ -360,7 +368,6 @@ fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args
                 matched,
                 after,
                 context_after,
-                // is_first_pattern,
                 pattern: found_pattern.pattern,
                 x,
                 y,
@@ -373,7 +380,7 @@ fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args
         is_first_pattern = false;
     }
 
-    return output_lines;
+    return output;
 }
 
 fn resolve_output_values(
@@ -385,7 +392,7 @@ fn resolve_output_values(
     let escaped_regex: Regex = Regex::new(r"%(\w+)%")
         .expect("Regex is predefined and shouldn't differ between runs.");
     let empty_os: OsString = OsString::new();
-    let mut output_lines: Vec<String> = Vec::new();
+    let mut output: Vec<String> = Vec::new();
     let mut current_color: Color = Color::White;//
     let mut current_styles: Styles = Styles::Clear;
 
@@ -407,7 +414,7 @@ fn resolve_output_values(
     let mut location: usize = 0;
     while let Ok(Some(escaped)) = escaped_regex.find_from_pos(output_format, location) {
         // Resolve characters in between
-        output_lines.push(
+        output.push(
             apply_styles(
                 &output_format[location..escaped.start()],
                 current_styles,
@@ -427,14 +434,11 @@ fn resolve_output_values(
         } {
             current_styles = styles;
         } else {
-            output_lines.push(
+            output.push(
                 apply_styles(
                     match escaped_string {
                         "file" => file.to_str().unwrap(),
                         "file_ext" => file.extension().unwrap_or(&empty_os).to_str().unwrap(),
-                        // "file_once" => if output_values.is_first_pattern
-                        //     {file.to_str().unwrap()} else {""},
-                        // "line_once" => if output_values.is_first_pattern {"\n"} else {""},
                         "x" => output_values.x.as_str(),
                         "y" => output_values.y.as_str(),
                         "before" => output_values.before.as_str(),
@@ -453,10 +457,11 @@ fn resolve_output_values(
         location = escaped.end();
     }
     // Resolve characters after last match
-    output_lines.push(
+    output.push(
         output_format[location..].to_owned()
     );
-    return output_lines;
+    output.push(String::from("\n"));
+    return output;
 }
 
 fn write_output(lines: &Vec<String>, args: &Args) {
@@ -488,6 +493,7 @@ fn unescape(input: &str) -> String {
             'n' => replace('\n'),
             'r' => replace('\r'),
             't' => replace('\t'),
+            '-' => replace('-'),
             '\\' => {
                 replace('\\');
                 index += 1; // Skip the next '\'
