@@ -2,18 +2,28 @@
 #![allow(clippy::print_literal)]
 #![allow(clippy::vec_init_then_push)]
 
-use clap::{builder::{ArgAction, RangedU64ValueParser, ValueParser}, Arg, ArgGroup, ArgMatches, Command, ValueHint};
+use clap::{
+    builder::{ArgAction, RangedU64ValueParser, ValueParser},
+    Arg,
+    ArgGroup,
+    ArgMatches,
+    Command,
+    ValueHint
+};
 use fancy_regex::{Match, Regex};
-use std::{env, ffi::OsString, fs, path::{Path, PathBuf}, str::FromStr};
+use std::{
+    env,
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr
+};
 use std::collections::HashSet;
 use walkdir::{DirEntry, IntoIter, WalkDir};
 use colored::{Color, ColoredString, Colorize, Styles};
 
 // TODO: check all lifetime specifiers
 // TODO: check all unwrap / expect usages
-// TODO: check that \r\n is supported
-// ? should I use lines() rather than split('\n')?
-// ? when should I use explicit typing?
 
 #[derive(Debug)]
 struct Args {
@@ -75,55 +85,68 @@ fn get_args() -> Args {
         .about("A CLI program to find all instances of TODO notes within a file or directory")
         .disable_version_flag(true)
         .arg(
-            Arg::new("VERSION").help("Print version").short('v').long("version")
-                .action(ArgAction::Version)
+            Arg::new("VERSION").help(
+                "Print version"
+            ).short('v').long("version").action(ArgAction::Version)
         )
         .arg(
-            Arg::new("PATH").help("TODO").action(ArgAction::Append)
-                .default_value(
-                    env::current_dir().expect("Should be able to get the cwd").into_os_string()
-                ).value_parser(ValueParser::path_buf()).value_hint(ValueHint::AnyPath)
+            Arg::new("PATH").help(
+                "The path or paths to check"
+            ).action(ArgAction::Append).default_value(
+                env::current_dir().expect("Should be able to get the cwd").into_os_string()
+            ).value_parser(ValueParser::path_buf()).value_hint(ValueHint::AnyPath)
         )
         .next_help_heading("File Selection")
         .arg(
-            Arg::new("INCLUDE_HIDDEN").help("Include hidden files").short('a')
-                .long("show-hidden-files").action(ArgAction::SetTrue)
+            Arg::new("INCLUDE_HIDDEN").help(
+                "Include hidden files"
+            ).short('a').long("show-hidden-files").action(ArgAction::SetTrue)
         )
         .arg(
-            Arg::new("FOLLOW_LINKS").help("Follow symbolic links").short('l').long("follow-links")
-                .action(ArgAction::SetTrue)
+            Arg::new("FOLLOW_LINKS").help(
+                "Follow symbolic links"
+            ).short('l').long("follow-links").action(ArgAction::SetTrue)
         )
         .arg(
-            Arg::new("MAX_DEPTH").help("Limit the depth of subdirectories included").short('d')
-                .long("depth").value_parser(RangedU64ValueParser::<usize>::new())
+            Arg::new("MAX_DEPTH").help(
+                "Limit the depth of subdirectories included"
+            ).short('d').long("depth").value_parser(RangedU64ValueParser::<usize>::new())
         )
         .next_help_heading("Patterns")
         .arg(
-            Arg::new("STRING").help("A string to match within files").short('s').long("match-string")
-                .action(ArgAction::Append)
+            Arg::new("STRING").help(
+                "A string to match within files (may be repeated with additional patterns)"
+            ).short('s').long("match-string").action(ArgAction::Append)
         )
         .arg(
-            Arg::new("REGEX").help("A regex to match within files").short('r').long("match-regex")
-                .action(ArgAction::Append)
+            Arg::new("REGEX").help(
+                "A regex to match within files (may be repeated with additional patterns)"
+            ).short('r').long("match-regex").action(ArgAction::Append)
         )
         .group(
             ArgGroup::new("PATTERN").args(["STRING", "REGEX"]).required(true)
         )
         .next_help_heading("Output")
         .arg(
-            Arg::new("OUTPUT_FILE").help("TODO").short('o').long("output-file")
-                .value_parser(ValueParser::path_buf()).value_hint(ValueHint::FilePath)
+            Arg::new("OUTPUT_FILE").help(
+                "A file to write the output too (disables colored output)"
+            ).short('o').long("output-file").value_parser(ValueParser::path_buf())
+                .value_hint(ValueHint::FilePath)
         )
         .arg(
-            Arg::new("FILE_OUTPUT").help("TODO").short('f').long("file-output")
-                .value_parser(ValueParser::string())
+            Arg::new("FILE_OUTPUT").help(
+                "The out format of each file with a matched pattern"
+            ).short('f').long("file-output").value_parser(ValueParser::string())
         )
         .arg(
-            Arg::new("MATCH_OUTPUT").help("TODO").short('m').long("match-output")
-                .value_parser(ValueParser::string())
+            Arg::new("MATCH_OUTPUT").help(
+                "The output format of each match within the files"
+            ).short('m').long("match-output").value_parser(ValueParser::string())
         )
         .arg(
-            Arg::new("CONTEXT").help("TODO").short('c').long("context-lines").default_value("3")
+            Arg::new("CONTEXT").help(
+                "The number of lines of context to output"
+            ).short('c').long("context-lines").default_value("3")
                 .value_parser(RangedU64ValueParser::<usize>::new())
         )
         .get_matches();
@@ -131,14 +154,14 @@ fn get_args() -> Args {
     let mut patterns: Vec<Regex> = Vec::new();
 
     if let Some(values) = matches.get_many::<String>("STRING") {
-        patterns.extend(values.cloned().filter_map(|value: String| {
+        patterns.extend(values.cloned().filter_map(|value: String| -> Option<Regex> {
             let escaped_value: &str = &fancy_regex::escape(&value);
             return Regex::new(escaped_value).ok();
         }).collect::<Vec<Regex>>());
     }
 
     if let Some(values) = matches.get_many::<String>("REGEX") {
-        patterns.extend(values.cloned().filter_map(|value: String| {
+        patterns.extend(values.cloned().filter_map(|value: String| -> Option<Regex> {
             return Regex::new(&value).ok();
         }).collect::<Vec<Regex>>());
     }
@@ -165,18 +188,10 @@ fn get_args() -> Args {
             );
             file_output = match file_output_option {
                 Some(value) => value.clone(),
-                None => String::from("%bold%%file%\n%clear%"),
+                None => String::from("%bold%%file%%clear%\n"),
             };
         },
     };
-
-    // Markdown Format
-    // -f "# %file%\n\n"
-    // -m "## %match%\n\n\- [ ] \\[Ln %y%, Col %x%]\n\`\`\`%file_ext%\n%context_before%\n\`\`\`\n\`%before%%match%\`**%after%**\n\`\`\`%file_ext%\n%context_after%\n\`\`\`\n"
-
-    // Short Markdown List
-    // -f "# %file%\n\n"
-    // -m "\- [ ] %match%%after% \\[Ln %y%, Col %x%]\n"
 
     return Args {
         paths: matches.get_many::<PathBuf>("PATH").expect("PATH is required").cloned()
@@ -239,7 +254,7 @@ fn find_pattern_in_files<'a>(
     files: &'a HashSet<PathBuf>,
     patterns: &'a Vec<Regex>
 ) -> Vec<FileFoundPatterns<'a>> {
-    return files.iter().filter_map(|file: &PathBuf| {
+    return files.iter().filter_map(|file: &PathBuf| -> Option<FileFoundPatterns> {
         if let Ok(contents) = fs::read_to_string(file) {
             let mut found_patterns: Vec<FoundPattern> = Vec::new();
             for pattern in patterns {
