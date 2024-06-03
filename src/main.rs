@@ -23,7 +23,7 @@ use walkdir::{DirEntry, IntoIter, WalkDir};
 use colored::{Color, ColoredString, Colorize, Styles};
 
 // TODO: check all lifetime specifiers
-// TODO: check all unwrap / expect usages
+// TODO: throw errors properly
 
 #[derive(Debug)]
 struct Args {
@@ -48,7 +48,7 @@ struct FoundPattern<'a> {
 #[derive(Debug)]
 struct FileFoundPatterns<'a> {
     file: &'a Path,
-    contents: String,
+    contents: String, // ! Shouldn't clone this value if possible, although it is only once per file
     found_patterns: Vec<FoundPattern<'a>>
 }
 
@@ -101,7 +101,7 @@ fn get_args() -> Args {
             Arg::new("INCLUDE_HIDDEN").help(
                 "Include hidden files"
             ).short('a').long("show-hidden-files").action(ArgAction::SetTrue)
-        )
+        ) // TODO: add gitignore option?
         .arg(
             Arg::new("FOLLOW_LINKS").help(
                 "Follow symbolic links"
@@ -255,7 +255,8 @@ fn find_pattern_in_files<'a>(
     patterns: &'a Vec<Regex>
 ) -> Vec<FileFoundPatterns<'a>> {
     return files.iter().filter_map(|file: &PathBuf| -> Option<FileFoundPatterns> {
-        if let Ok(contents) = fs::read_to_string(file) {
+        if let Ok(file_contents) = fs::read_to_string(file) {
+            let contents: String = file_contents.replace('\r', "");
             let mut found_patterns: Vec<FoundPattern> = Vec::new();
             for pattern in patterns {
                 let matches: Vec<Match> = find_all_matches(pattern, &contents);
@@ -288,44 +289,55 @@ fn find_all_matches<'a>(pattern: &Regex, search: &'a str) -> Vec<Match<'a>> {
 
 fn generate_output_for_file(file_found_patterns: &FileFoundPatterns, args: &Args) -> Vec<String> {
     let mut output: Vec<String> = Vec::new();
-    // TODO: can't handle matches on the first line kinda need to add 0 and the end to this array
     let mut is_first_pattern: bool = true;
 
     for found_pattern in &file_found_patterns.found_patterns {
-        let newlines: Vec<usize> = file_found_patterns.contents.match_indices('\n')
-            .map(|index| index.0).collect::<Vec<usize>>();
+        let mut newlines: Vec<usize> = Vec::new();
+        newlines.push(0);
+        newlines.extend(file_found_patterns.contents.match_indices('\n')
+        .map(|index| index.0 + 1).collect::<Vec<usize>>());
+        newlines.push(file_found_patterns.contents.as_str().len() + 1);
+
         let mut closest_start: usize = 0;
-        while newlines[closest_start] < found_pattern.start {
+        while newlines[closest_start] < found_pattern.start + 1 {
             closest_start += 1;
         }
         closest_start -= 1;
         let mut closest_end: usize = closest_start;
-        while newlines[closest_end] < found_pattern.end {
+        while newlines[closest_end] < found_pattern.end + 1 {
             closest_end += 1;
         }
 
         let newlines_first_index: usize =
             match (closest_start as isize - args.context as isize) >= 0 {
-                true => newlines[closest_start - args.context] + 1,
+                true => newlines[closest_start - args.context],
                 false => 0
             };
         let newlines_last_index: usize =
             match closest_end + args.context  < newlines.len() {
-                true => newlines[closest_end + args.context],
+                true => newlines[closest_end + args.context] - 1,
                 false => file_found_patterns.contents.as_str().len()
             };
 
         let contents: &str = file_found_patterns.contents.as_str();
-        let mut context_before: String = contents
-            [newlines_first_index..newlines[closest_start]].to_owned();
-        let mut before: String = contents
-            [newlines[closest_start] + 1..found_pattern.start].to_owned();
-        let matched: String = contents
-            [found_pattern.start..found_pattern.end].to_owned();
-        let after: String = contents
-            [found_pattern.end..newlines[closest_end]].to_owned();
-        let mut context_after: String = contents
-            [newlines[closest_end] + 1..newlines_last_index].to_owned();
+        let mut context_before: String =
+            if newlines[closest_start] > 0 {
+                contents[newlines_first_index..newlines[closest_start] - 1].to_owned()
+            } else {
+                String::from("")
+            };
+        let mut before: String =
+            contents[newlines[closest_start]..found_pattern.start].to_owned();
+        let matched: String =
+            contents[found_pattern.start..found_pattern.end].to_owned();
+        let after: String =
+            contents[found_pattern.end..newlines[closest_end] - 1].to_owned();
+        let mut context_after: String =
+            if newlines_last_index < file_found_patterns.contents.as_str().len() {
+                contents[newlines[closest_end]..newlines_last_index].to_owned()
+            } else {
+                String::from("")
+            };
 
         let mut relevant_lines: Vec<&str> = Vec::new();
         relevant_lines.extend(context_before.split('\n'));
@@ -475,7 +487,7 @@ fn resolve_output_values(
     output.push(
         output_format[location..].to_owned()
     );
-    output.push(String::from("\n"));
+    // output.push(String::from("\n"));
     return output;
 }
 
