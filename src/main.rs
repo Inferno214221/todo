@@ -1,6 +1,4 @@
-#![allow(clippy::needless_return)]
 #![allow(clippy::print_literal)]
-#![allow(clippy::vec_init_then_push)]
 
 use clap::{
     builder::{ArgAction, RangedU64ValueParser, ValueParser},
